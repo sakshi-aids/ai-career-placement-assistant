@@ -1,7 +1,32 @@
 import streamlit as st
 import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from pypdf import PdfReader
 from database import create_database, save_analysis, get_analysis_history
+
+
+
+def calculate_ai_job_match(resume_text, job_description):
+    """Calculate NLP-based similarity between resume and job description."""
+    if not resume_text.strip() or not job_description.strip():
+        return 0
+
+    documents = [resume_text.lower(), job_description.lower()]
+
+    try:
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 2)
+        )
+        tfidf_matrix = vectorizer.fit_transform(documents)
+        similarity = cosine_similarity(
+            tfidf_matrix[0:1],
+            tfidf_matrix[1:2]
+        )[0][0]
+        return round(float(similarity) * 100)
+    except ValueError:
+        return 0
 
 # ============================================================
 # DATABASE
@@ -211,7 +236,7 @@ if mode == "Looking for a Job":
             text = text.replace("data-analysis", "data analysis")
             text = text.replace("data-visualization", "data visualization")
             text = text.replace("problem-solving", "problem solving")
-            return re.sub(r"\\s+", " ", text)
+            return re.sub(r"\s+", " ", text)
 
         def skill_present(text, skill):
             normalized_text = normalize_skill_text(text)
@@ -480,21 +505,33 @@ if mode == "Looking for a Job":
 
 
             # ------------------------------------------------
-            # JOB MATCH METRICS
+            # JOB MATCH + AI/NLP MATCH
             # ------------------------------------------------
+
+            ai_match_percentage = calculate_ai_job_match(
+                resume_text,
+                job_description
+            )
 
             st.subheader("🎯 Resume ↔ Job Match")
 
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
 
             with col1:
 
                 st.metric(
-                    "Job Match",
+                    "🎯 Skill Match",
                     f"{match_percentage}%"
                 )
 
             with col2:
+
+                st.metric(
+                    "🤖 AI/NLP Match",
+                    f"{ai_match_percentage}%"
+                )
+
+            with col3:
 
                 st.metric(
                     "Matched Skills",
@@ -502,8 +539,15 @@ if mode == "Looking for a Job":
                 )
 
             st.caption(
-                "This is the current match for the Job Description entered above."
+                "AI/NLP Match uses TF-IDF vectorization and cosine similarity to compare the resume with the job description."
             )
+
+            if ai_match_percentage >= 70:
+                st.success("🤖 AI analysis: Strong textual alignment with this job description.")
+            elif ai_match_percentage >= 45:
+                st.warning("🤖 AI analysis: Moderate alignment. Consider adding more job-relevant skills and project keywords.")
+            else:
+                st.info("🤖 AI analysis: Low textual alignment. Review the missing skills and tailor your resume to this role.")
 
 
             # ------------------------------------------------
