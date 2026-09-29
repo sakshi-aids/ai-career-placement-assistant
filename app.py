@@ -1,4 +1,5 @@
 import streamlit as st
+import re
 from pypdf import PdfReader
 from database import create_database, save_analysis, get_analysis_history
 
@@ -149,7 +150,6 @@ if mode == "Looking for a Job":
     score = 0
     match_percentage = 0
     missing_skills = []
-    job_description = ""
 
     # --------------------------------------------------------
     # RESUME UPLOAD
@@ -202,26 +202,89 @@ if mode == "Looking for a Job":
             "problem solving"
         ]
 
-        resume_lower = resume_text.lower()
+        # Normalize text so common variations such as C++, c++, GitHub,
+        # and "machine-learning" can still be detected reliably.
+        def normalize_skill_text(text):
+            text = text.lower()
+            text = text.replace("c++", "cpp")
+            text = text.replace("machine-learning", "machine learning")
+            text = text.replace("data-analysis", "data analysis")
+            text = text.replace("data-visualization", "data visualization")
+            text = text.replace("problem-solving", "problem solving")
+            return re.sub(r"\\s+", " ", text)
 
+        def skill_present(text, skill):
+            normalized_text = normalize_skill_text(text)
+            normalized_skill = normalize_skill_text(skill)
+
+            aliases = {
+                "c++": ["cpp", "c plus plus"],
+                "machine learning": ["machine learning", "machine-learning", "ml"],
+                "deep learning": ["deep learning", "deep-learning", "dl"],
+                "data analysis": ["data analysis", "data analytics"],
+                "data visualization": ["data visualization", "data visualisation"],
+                "problem solving": ["problem solving", "problem-solving"],
+                "github": ["github", "git hub"],
+            }
+
+            terms = aliases.get(skill, [normalized_skill])
+
+            for term in terms:
+                if re.search(r"(?<![a-z0-9])" + re.escape(normalize_skill_text(term)) + r"(?![a-z0-9])", normalized_text):
+                    return True
+            return False
 
         # ----------------------------------------------------
         # DETECT SKILLS
         # ----------------------------------------------------
 
         for skill in skills:
-
-            if skill in resume_lower:
+            if skill_present(resume_text, skill):
                 detected_skills.append(skill)
 
 
         # ----------------------------------------------------
         # RESUME SCORE
         # ----------------------------------------------------
+        # Core skills carry more weight than optional skills so that
+        # a resume with strong, relevant fundamentals is not unfairly
+        # rated low just because it does not contain every skill.
+
+        core_skills = [
+            "python",
+            "sql",
+            "pandas",
+            "numpy",
+            "machine learning",
+            "statistics",
+            "data analysis",
+            "git",
+            "github",
+            "problem solving",
+            "communication"
+        ]
+
+        optional_skills = [
+            skill for skill in skills
+            if skill not in core_skills
+        ]
+
+        core_found = sum(
+            1 for skill in core_skills
+            if skill in detected_skills
+        )
+
+        optional_found = sum(
+            1 for skill in optional_skills
+            if skill in detected_skills
+        )
+
+        core_score = (core_found / len(core_skills)) * 70
+        optional_score = (optional_found / len(optional_skills)) * 30
 
         score = min(
             100,
-            int((len(detected_skills) / len(skills)) * 100)
+            int(core_score + optional_score)
         )
 
 
@@ -242,11 +305,11 @@ if mode == "Looking for a Job":
 
         with col2:
 
+            latest_saved_match = history[0][4] if history else None
+
             st.metric(
-                "🎯 Job Match",
-                f"{match_percentage}%"
-                if job_description.strip()
-                else "—"
+                "🎯 Last Saved Job Match",
+                f"{latest_saved_match}%" if latest_saved_match is not None else "—"
             )
 
         with col3:
@@ -285,19 +348,19 @@ if mode == "Looking for a Job":
         if score >= 70:
 
             st.success(
-                "Your resume contains a good number of relevant skills."
+                "Strong resume skill profile. Keep adding role-specific projects and measurable achievements."
             )
 
-        elif score >= 40:
+        elif score >= 50:
 
             st.warning(
-                "Your resume is average. Consider adding more relevant technical skills."
+                "Good foundation. Add a few role-specific skills and practical projects to strengthen your resume."
             )
 
         else:
 
             st.error(
-                "Your resume needs improvement. Add technical skills and projects."
+                "Your resume needs improvement. Focus on core technical skills and practical projects."
             )
 
 
@@ -306,19 +369,6 @@ if mode == "Looking for a Job":
         # ----------------------------------------------------
 
         st.subheader("🤖 Smart Resume Feedback")
-
-        if score >= 70:
-            st.success(
-                "Your technical skill section looks strong. Keep adding projects and role-specific skills."
-            )
-        elif score >= 40:
-            st.warning(
-                "Your technical skill section is average. Add more relevant skills and practical projects."
-            )
-        else:
-            st.error(
-                "Your technical skill section needs improvement. Focus on core technical skills and projects."
-            )
 
         if "python" not in detected_skills:
             st.write("• Consider adding Python projects.")
@@ -331,6 +381,24 @@ if mode == "Looking for a Job":
 
         if "git" not in detected_skills:
             st.write("• Add Git/GitHub to your technical skills.")
+
+        if score >= 70:
+
+            st.success(
+                "Your technical skill section looks strong and well-developed."
+            )
+
+        elif score >= 50:
+
+            st.warning(
+                "Your technical skill section is developing well. Add a few role-specific skills and projects."
+            )
+
+        else:
+
+            st.error(
+                "Your technical skill section needs improvement. Focus on core skills first."
+            )
 
 
         # ====================================================
@@ -350,13 +418,10 @@ if mode == "Looking for a Job":
 
         if job_description:
 
-            job_lower = job_description.lower()
-
             job_skills = []
 
             for skill in skills:
-
-                if skill in job_lower:
+                if skill_present(job_description, skill):
                     job_skills.append(skill)
 
 
@@ -435,6 +500,10 @@ if mode == "Looking for a Job":
                     "Matched Skills",
                     len(matched_skills)
                 )
+
+            st.caption(
+                "This is the current match for the Job Description entered above."
+            )
 
 
             # ------------------------------------------------
@@ -603,72 +672,149 @@ if mode == "Looking for a Job":
 
         difficulty = st.selectbox(
             "Select Difficulty",
-            ["Easy", "Medium", "Hard"]
+            ["Easy", "Medium", "Hard"],
+            key="interview_difficulty"
         )
 
 
+        # Separate question banks for each difficulty level.
+        # Changing Easy/Medium/Hard now changes the actual questions.
         question_bank = {
+            "Easy": {
+                "python": [
+                    "What is Python and where is it commonly used?",
+                    "What is a variable in Python?",
+                    "What is the difference between a list and a tuple?"
+                ],
+                "sql": [
+                    "What is SQL?",
+                    "What is a primary key?",
+                    "What is the purpose of the SELECT statement?"
+                ],
+                "pandas": [
+                    "What is Pandas used for?",
+                    "What is a DataFrame?",
+                    "How do you read a CSV file using Pandas?"
+                ],
+                "numpy": [
+                    "What is NumPy?",
+                    "What is a NumPy array?",
+                    "Why is NumPy useful in data science?"
+                ],
+                "machine learning": [
+                    "What is Machine Learning?",
+                    "What is supervised learning?",
+                    "What is a feature in Machine Learning?"
+                ],
+                "data analysis": [
+                    "What is data analysis?",
+                    "Why is data cleaning important?",
+                    "What is the purpose of data visualization?"
+                ],
+                "git": [
+                    "What is Git?",
+                    "What is GitHub?",
+                    "What does git commit do?"
+                ]
+            },
 
-            "python": [
-                "What is Python?",
-                "What is the difference between a list and tuple?",
-                "What are functions in Python?"
-            ],
+            "Medium": {
+                "python": [
+                    "Explain list comprehension with an example.",
+                    "What is the difference between a shallow copy and a deep copy?",
+                    "How does exception handling work in Python?"
+                ],
+                "sql": [
+                    "Explain the difference between WHERE and HAVING.",
+                    "What is the difference between INNER JOIN and LEFT JOIN?",
+                    "What is normalization and why is it used?"
+                ],
+                "pandas": [
+                    "How would you handle missing values in a DataFrame?",
+                    "What is the difference between loc and iloc?",
+                    "How do you group and aggregate data in Pandas?"
+                ],
+                "numpy": [
+                    "What is broadcasting in NumPy?",
+                    "What is the difference between a Python list and a NumPy array?",
+                    "How would you calculate the mean of an array?"
+                ],
+                "machine learning": [
+                    "What is the difference between supervised and unsupervised learning?",
+                    "What is overfitting and how can it be reduced?",
+                    "Why do we split data into training and testing sets?"
+                ],
+                "data analysis": [
+                    "What are the main steps in a data analysis workflow?",
+                    "How would you identify and handle outliers?",
+                    "Why is exploratory data analysis important?"
+                ],
+                "git": [
+                    "What is the difference between git pull and git fetch?",
+                    "What is a branch in Git?",
+                    "How would you resolve a merge conflict?"
+                ]
+            },
 
-            "sql": [
-                "What is SQL?",
-                "What is a primary key?",
-                "What is the difference between WHERE and HAVING?"
-            ],
-
-            "pandas": [
-                "What is Pandas?",
-                "What is a DataFrame?",
-                "How do you handle missing values in Pandas?"
-            ],
-
-            "numpy": [
-                "What is NumPy?",
-                "What is an array?",
-                "Why is NumPy used in data science?"
-            ],
-
-            "machine learning": [
-                "What is Machine Learning?",
-                "What is supervised learning?",
-                "What is overfitting?"
-            ],
-
-            "data analysis": [
-                "What is data analysis?",
-                "What are the steps involved in data analysis?",
-                "Why is data cleaning important?"
-            ],
-
-            "git": [
-                "What is Git?",
-                "What is GitHub?",
-                "What is git commit?"
-            ]
+            "Hard": {
+                "python": [
+                    "How would you optimize a Python program that processes a very large dataset?",
+                    "Explain generators and why they can be useful for memory-efficient programs.",
+                    "How would you debug a Python application with slow execution?"
+                ],
+                "sql": [
+                    "How would you optimize a slow SQL query on a large table?",
+                    "Explain indexing and its effect on query performance.",
+                    "How would you find duplicate records and remove them safely?"
+                ],
+                "pandas": [
+                    "How would you process a DataFrame that is too large to fit comfortably in memory?",
+                    "How would you optimize a slow Pandas operation on millions of rows?",
+                    "How would you combine multiple DataFrames while handling duplicate keys?"
+                ],
+                "numpy": [
+                    "How can vectorization improve NumPy performance?",
+                    "How would you work with a very large multidimensional NumPy array efficiently?",
+                    "Explain when broadcasting can cause unexpected results."
+                ],
+                "machine learning": [
+                    "How would you diagnose a model that performs well on training data but poorly on test data?",
+                    "How would you choose evaluation metrics for an imbalanced classification problem?",
+                    "Explain the bias-variance trade-off and how it affects model selection."
+                ],
+                "data analysis": [
+                    "How would you investigate a dataset containing missing values, outliers and inconsistent records?",
+                    "How would you decide whether a correlation is meaningful or potentially misleading?",
+                    "How would you present analytical findings to a non-technical stakeholder?"
+                ],
+                "git": [
+                    "How would you recover from an incorrect commit that has already been pushed?",
+                    "Explain rebase versus merge and when each can be used.",
+                    "How would you manage Git branches for a team project with multiple developers?"
+                ]
+            }
         }
-
 
         available_questions = []
 
         for skill in detected_skills:
-
-            if skill in question_bank:
-
+            if skill in question_bank[difficulty]:
                 available_questions.extend(
-                    question_bank[skill]
+                    question_bank[difficulty][skill]
                 )
-
 
         if available_questions:
 
             st.write(
                 f"### 📝 {difficulty} Level Questions"
             )
+
+            if difficulty == "Easy":
+                st.caption("Basic concepts and fundamentals")
+            elif difficulty == "Medium":
+                st.caption("Concept application and problem-solving")
+            else:
+                st.caption("Advanced concepts, optimization and real-world scenarios")
 
             for i, question in enumerate(
                 available_questions[:5],
@@ -870,5 +1016,5 @@ st.divider()
 st.caption(
     "🤖 AI Career & Placement Assistant | "
     "Python + Streamlit + SQLite"
-)    
+)
     
